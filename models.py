@@ -12,9 +12,11 @@ class GraphState(TypedDict):
     total_operating_income: float
     churn_probability: float
     proposed_action: str
+    edited_action: str | None
     confidence_score: float
     reasoning: str
     human_decision: str | None
+    reviewer_id: str
     execution_result: str | None
 
 

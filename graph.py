@@ -1,11 +1,13 @@
 """LangGraph workflow for churn-risk actions with HITL routing."""
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from models import GraphState
+from audit import append_audit_entry
+from models import AuditEntry, GraphState
 
 CONFIDENCE_THRESHOLD = 0.85
 LOW_RISK_ACTION = "send_email"
@@ -26,9 +28,11 @@ def create_initial_state(
         "total_operating_income": total_operating_income,
         "churn_probability": churn_probability,
         "proposed_action": "",
+        "edited_action": None,
         "confidence_score": 0.0,
         "reasoning": "",
         "human_decision": None,
+        "reviewer_id": "",
         "execution_result": None,
     }
 
@@ -72,9 +76,11 @@ def evaluate_customer(state: GraphState) -> dict[str, object]:
 
     return {
         "proposed_action": proposed_action,
+        "edited_action": None,
         "confidence_score": confidence_score,
         "reasoning": reasoning,
         "human_decision": None,
+        "reviewer_id": "",
         "execution_result": None,
     }
 
@@ -99,26 +105,36 @@ def route_action(state: GraphState) -> RouteName:
 def execute_low_risk_action(state: GraphState) -> dict[str, str]:
     """Auto-execute a low-risk action after routing checks pass."""
 
-    return {
-        "execution_result": (
-            f"Auto-executed '{state['proposed_action']}' for "
-            f"customer {state['customer_id']}."
-        )
-    }
+    result = (
+        f"Auto-executed '{state['proposed_action']}' for "
+        f"customer {state['customer_id']}."
+    )
+    _record_audit_entry(state, reviewer_id="system", decision="auto_execute")
+    return {"execution_result": result}
 
 
 def execute_high_risk_action(state: GraphState) -> dict[str, str]:
     """Execute or abort an interrupted action after a human decision."""
 
     decision = (state.get("human_decision") or "").strip().lower()
+    reviewer_id = state.get("reviewer_id", "").strip()
+    if not reviewer_id:
+        raise ValueError("reviewer_id is required for a human-reviewed action")
+
+    effective_action = state["proposed_action"]
+    if decision == "edit":
+        effective_action = (state.get("edited_action") or "").strip()
+        if not effective_action:
+            raise ValueError("edited_action is required when human_decision is 'edit'")
+
     if decision == "reject":
         result = (
-            f"Aborted '{state['proposed_action']}' for "
+            f"Aborted '{effective_action}' for "
             f"customer {state['customer_id']} after human rejection."
         )
     elif decision in {"approve", "edit"}:
         result = (
-            f"Executed '{state['proposed_action']}' for "
+            f"Executed '{effective_action}' for "
             f"customer {state['customer_id']} after human {decision}."
         )
     else:
@@ -127,7 +143,36 @@ def execute_high_risk_action(state: GraphState) -> dict[str, str]:
             "before executing a reviewed action."
         )
 
-    return {"execution_result": result}
+    _record_audit_entry(
+        state,
+        reviewer_id=reviewer_id,
+        decision=decision,
+        action=effective_action,
+    )
+    return {
+        "proposed_action": effective_action,
+        "execution_result": result,
+    }
+
+
+def _record_audit_entry(
+    state: GraphState,
+    reviewer_id: str,
+    decision: str,
+    action: str | None = None,
+) -> None:
+    """Persist the agent proposal and its final execution decision."""
+
+    append_audit_entry(
+        AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            agent_id="churn-risk-agent",
+            action=action or state["proposed_action"],
+            confidence=state["confidence_score"],
+            reviewer_id=reviewer_id,
+            decision=decision,
+        )
+    )
 
 
 def build_graph(checkpointer: MemorySaver | None = None):

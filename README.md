@@ -27,5 +27,12 @@ python -m pip install -r requirements.txt
 `-- README.md
 ```
 
-Các bước tiếp theo sẽ bổ sung LangGraph workflow, giao diện Human-in-the-Loop,
-audit logging và hướng dẫn chạy đầy đủ.
+## Chạy ứng dụng
+
+```powershell
+streamlit run app.py
+```
+
+Ứng dụng hiện hỗ trợ confidence routing, hard policy, checkpoint bằng
+`MemorySaver`, Approve, Reject, Edit và audit logging vào `audit_log.json`.
+README sẽ được hoàn thiện cùng bộ kiểm thử ở bước cuối.
